@@ -1,6 +1,10 @@
 package caro.server;
 
 import caro.common.Message;
+import caro.database.DatabaseConnection;
+import caro.database.MatchDAO;
+import caro.database.MoveDAO;
+import caro.database.UserDAO;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -37,6 +41,15 @@ public class GameRoom {
     private final Timer turnTimer = new Timer(true); // daemon thread, tự tắt khi server đóng
     private TimerTask currentTurnTask;
 
+    // ==== PHASE 5/7/8: mã phòng + lưu DB + đầu hàng/đề nghị hòa ====
+    private String roomCode;
+    private Integer matchId;       // null nếu 1 trong 2 người chơi chưa đăng nhập (anonymous demo)
+    private int moveCounter = 0;
+    private long startTimeMillis;
+    private Integer drawOfferFromPlayerId; // null nếu không có đề nghị hòa nào đang chờ
+
+    public void setRoomCode(String roomCode) { this.roomCode = roomCode; }
+
     public void setPlayer1(ClientHandler p) { this.player1 = p; }
     public void setPlayer2(ClientHandler p) { this.player2 = p; }
 
@@ -46,9 +59,26 @@ public class GameRoom {
         currentTurn = 1;
         replayRequested1 = false;
         replayRequested2 = false;
+        drawOfferFromPlayerId = null;
+        moveCounter = 0;
+        startTimeMillis = System.currentTimeMillis();
         for (int i = 0; i < SIZE; i++) {
             for (int j = 0; j < SIZE; j++) {
                 board[i][j] = 0;
+            }
+        }
+
+        // PHASE 8: tạo bản ghi match trong DB nếu cả 2 người chơi đều đã đăng nhập.
+        // Nếu 1 trong 2 là kết nối "vô danh" (chạy CaroClient.java demo cũ, chưa
+        // qua LoginFrame), matchId = null -> vẫn chơi bình thường, chỉ không lưu DB.
+        matchId = null;
+        Integer uid1 = player1.getUserId();
+        Integer uid2 = player2.getUserId();
+        if (uid1 != null && uid2 != null) {
+            try {
+                matchId = new MatchDAO().createMatch(uid1, uid2, "ONLINE", roomCode);
+            } catch (DatabaseConnection.DatabaseException e) {
+                System.out.println("[GameRoom] Không thể tạo match trong DB: " + e.getMessage());
             }
         }
 
@@ -114,6 +144,19 @@ public class GameRoom {
     private void applyMove(int playerId, int x, int y) {
         board[x][y] = playerId;
         currentTurn = (playerId == 1) ? 2 : 1;
+        moveCounter++;
+
+        if (matchId != null) {
+            Integer uid = (playerId == 1) ? player1.getUserId() : player2.getUserId();
+            if (uid != null) {
+                try {
+                    new MoveDAO().saveMove(matchId, uid, x, y, moveCounter);
+                } catch (DatabaseConnection.DatabaseException e) {
+                    // Lỗi lưu 1 nước đi KHÔNG được làm gián đoạn ván đang chơi (mục XXIV)
+                    System.out.println("[GameRoom] Lỗi lưu nước đi vào DB: " + e.getMessage());
+                }
+            }
+        }
 
         Message move = new Message(Message.Type.MOVE);
         move.playerId = playerId;
@@ -125,6 +168,7 @@ public class GameRoom {
         if (checkWin(x, y, playerId)) {
             gameOver = true;
             cancelTurnTimer();
+            finishMatchInDb(playerId, "WIN");
             Message win = new Message(Message.Type.WIN);
             win.winnerId = playerId;
             if (lastWinCells != null) {
@@ -143,12 +187,50 @@ public class GameRoom {
         if (isBoardFull()) {
             gameOver = true;
             cancelTurnTimer();
+            finishMatchInDb(null, "DRAW");
             broadcast(new Message(Message.Type.DRAW));
             return;
         }
 
         // Ván vẫn tiếp tục -> bắt đầu đếm giờ cho lượt kế tiếp
         scheduleTurnTimer();
+    }
+
+    /**
+     * Ghi kết quả cuối cùng của trận vào DB (bảng matches) và cập nhật
+     * thống kê/rating của cả 2 người chơi (bảng users) - mục XIX.
+     * Bỏ qua hoàn toàn nếu matchId == null (1 trong 2 bên không đăng nhập).
+     *
+     * @param winnerPlayerId 1 hoặc 2 nếu có người thắng rõ ràng, null nếu hòa
+     * @param result         "WIN" / "DRAW" - ghi vào cột matches.result
+     */
+    private void finishMatchInDb(Integer winnerPlayerId, String result) {
+        if (matchId == null) return;
+        try {
+            Integer uid1 = player1.getUserId();
+            Integer uid2 = player2.getUserId();
+            Integer winnerUserId = null;
+            if (winnerPlayerId != null) {
+                winnerUserId = (winnerPlayerId == 1) ? uid1 : uid2;
+            }
+            int durationSec = (int) Math.max(0, (System.currentTimeMillis() - startTimeMillis) / 1000);
+
+            new MatchDAO().finishMatch(matchId, winnerUserId, result, durationSec);
+
+            UserDAO userDAO = new UserDAO();
+            String outcome1, outcome2;
+            if ("DRAW".equals(result)) {
+                outcome1 = "DRAW";
+                outcome2 = "DRAW";
+            } else {
+                outcome1 = (winnerPlayerId != null && winnerPlayerId == 1) ? "WIN" : "LOSS";
+                outcome2 = (winnerPlayerId != null && winnerPlayerId == 2) ? "WIN" : "LOSS";
+            }
+            userDAO.updateStatsAfterMatch(uid1, outcome1, player2.getRating());
+            userDAO.updateStatsAfterMatch(uid2, outcome2, player1.getRating());
+        } catch (DatabaseConnection.DatabaseException e) {
+            System.out.println("[GameRoom] Lỗi lưu kết quả trận đấu vào DB: " + e.getMessage());
+        }
     }
 
     private void scheduleTurnTimer() {
@@ -253,14 +335,74 @@ public class GameRoom {
 
     /**
      * Gọi khi 1 trong 2 client ngắt kết nối giữa ván.
+     * Người còn lại được tính thắng (ABANDONED) - phù hợp kỳ vọng thông thường
+     * "đối thủ thoát thì mình thắng", đồng thời vẫn phân biệt được với thắng
+     * bình thường qua cột matches.result = 'ABANDONED'.
      */
     public synchronized void notifyOpponentLeft(ClientHandler leaver) {
         if (gameOver) return;
         gameOver = true;
         cancelTurnTimer();
         ClientHandler other = (leaver == player1) ? player2 : player1;
+        Integer winnerPlayerId = (other == player1) ? 1 : (other == player2) ? 2 : null;
+        finishMatchInDb(winnerPlayerId, "ABANDONED");
         if (other != null) {
             other.sendMessage(new Message(Message.Type.OPPONENT_LEFT));
         }
+    }
+
+    /**
+     * PHASE 7: người chơi bấm "Đầu hàng" - đối thủ thắng ngay lập tức.
+     */
+    public synchronized void surrender(int playerId) {
+        if (gameOver) return;
+        gameOver = true;
+        cancelTurnTimer();
+        int winnerId = (playerId == 1) ? 2 : 1;
+        finishMatchInDb(winnerId, "WIN");
+
+        Message win = new Message(Message.Type.WIN);
+        win.winnerId = winnerId;
+        win.note = "Đối thủ đã đầu hàng.";
+        broadcast(win);
+    }
+
+    /**
+     * PHASE 7: người chơi bấm "Đề nghị hòa" - chuyển tiếp đề nghị cho đối thủ.
+     */
+    public synchronized void offerDraw(int playerId) {
+        if (gameOver) return;
+        drawOfferFromPlayerId = playerId;
+        ClientHandler offerer = (playerId == 1) ? player1 : player2;
+        ClientHandler other = (playerId == 1) ? player2 : player1;
+        if (other == null) return;
+        Message m = new Message(Message.Type.OFFER_DRAW);
+        m.note = offerer.getPlayerName() + " đề nghị hòa.";
+        other.sendMessage(m);
+    }
+
+    /**
+     * PHASE 7: đối thủ phản hồi đề nghị hòa.
+     * @param playerId người PHẢN HỒI (không phải người đề nghị)
+     * @param accept   true = đồng ý hòa, false = từ chối
+     */
+    public synchronized void respondDraw(int playerId, boolean accept) {
+        if (gameOver || drawOfferFromPlayerId == null) return;
+        if (playerId == drawOfferFromPlayerId) return; // người đề nghị không tự phản hồi được
+
+        if (accept) {
+            gameOver = true;
+            cancelTurnTimer();
+            finishMatchInDb(null, "DRAW");
+            broadcast(new Message(Message.Type.DRAW));
+        } else {
+            ClientHandler offerer = (drawOfferFromPlayerId == 1) ? player1 : player2;
+            if (offerer != null) {
+                Message m = new Message(Message.Type.DRAW_REJECT);
+                m.note = "Đối thủ đã từ chối đề nghị hòa.";
+                offerer.sendMessage(m);
+            }
+        }
+        drawOfferFromPlayerId = null;
     }
 }

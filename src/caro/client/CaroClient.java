@@ -60,6 +60,8 @@ public class CaroClient extends JFrame {
 
     private ObjectOutputStream out;
     private ObjectInputStream in;
+    private Socket socket;
+    private Runnable returnToLobbyCallback; // null nếu chạy CaroClient độc lập (không qua Lobby)
 
     private String myName = "Người chơi";
     private String opponentName = "Đối thủ";
@@ -286,10 +288,35 @@ public class CaroClient extends JFrame {
         chatInput.setText("");
     }
 
+    private RoundedButton surrenderButton;
+    private RoundedButton offerDrawButton;
+    private RoundedButton backToLobbyButton;
+
     private JPanel buildBottomPanel() {
         JPanel bottomPanel = new JPanel();
         bottomPanel.setBackground(Color.WHITE);
         bottomPanel.setBorder(new EmptyBorder(0, 0, 16, 0));
+
+        backToLobbyButton = new RoundedButton("VỀ SẢNH CHỜ");
+        backToLobbyButton.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        backToLobbyButton.setBackground(new Color(93, 64, 55)); // nâu gỗ trung
+        backToLobbyButton.setForeground(Color.WHITE);
+        backToLobbyButton.setBorder(new EmptyBorder(10, 20, 10, 20));
+        backToLobbyButton.addActionListener(e -> onReturnToLobbyClick());
+
+        offerDrawButton = new RoundedButton("ĐỀ NGHỊ HÒA");
+        offerDrawButton.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        offerDrawButton.setBackground(new Color(168, 111, 26)); // vàng cam đất
+        offerDrawButton.setForeground(Color.WHITE);
+        offerDrawButton.setBorder(new EmptyBorder(10, 20, 10, 20));
+        offerDrawButton.addActionListener(e -> onOfferDrawClick());
+
+        surrenderButton = new RoundedButton("ĐẦU HÀNG");
+        surrenderButton.setFont(new Font("Segoe UI", Font.BOLD, 13));
+        surrenderButton.setBackground(new Color(150, 40, 27)); // đỏ đất nung
+        surrenderButton.setForeground(Color.WHITE);
+        surrenderButton.setBorder(new EmptyBorder(10, 20, 10, 20));
+        surrenderButton.addActionListener(e -> onSurrenderClick());
 
         replayButton = new RoundedButton("CHƠI LẠI");
         replayButton.setFont(new Font("Segoe UI", Font.BOLD, 15));
@@ -299,8 +326,31 @@ public class CaroClient extends JFrame {
         replayButton.setVisible(false); // chỉ hiện sau khi ván kết thúc
         replayButton.addActionListener(e -> onReplayClick());
 
+        bottomPanel.add(offerDrawButton);
+        bottomPanel.add(surrenderButton);
         bottomPanel.add(replayButton);
+        bottomPanel.add(backToLobbyButton);
         return bottomPanel;
+    }
+
+    private void onSurrenderClick() {
+        if (!gameStarted) return;
+        int confirm = JOptionPane.showConfirmDialog(this,
+                "Bạn có chắc chắn muốn đầu hàng?", "Xác nhận đầu hàng",
+                JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (confirm == JOptionPane.YES_OPTION) {
+            Message m = new Message(Message.Type.SURRENDER);
+            m.playerId = myId;
+            sendMessage(m);
+        }
+    }
+
+    private void onOfferDrawClick() {
+        if (!gameStarted) return;
+        Message m = new Message(Message.Type.OFFER_DRAW);
+        m.playerId = myId;
+        sendMessage(m);
+        setStatus("Đã gửi đề nghị hòa, đang chờ đối thủ phản hồi...", COLOR_PILL_WAIT);
     }
 
     private Color baseCellColor(int i, int j) {
@@ -373,9 +423,10 @@ public class CaroClient extends JFrame {
         sendMessage(replay);
     }
 
-    private void connectToServer(String ip, int port) {
+    public void connectToServer(String ip, int port) {
         try {
             Socket socket = new Socket(ip, port);
+            this.socket = socket;
             out = new ObjectOutputStream(socket.getOutputStream());
             out.flush();
             in = new ObjectInputStream(socket.getInputStream());
@@ -395,6 +446,68 @@ public class CaroClient extends JFrame {
             JOptionPane.showMessageDialog(this, "Không thể kết nối tới server: " + e.getMessage());
             System.exit(0);
         }
+    }
+
+    /**
+     * PHASE 4/5: LobbyFrame gọi hàm này để "bàn giao" lại 1 kết nối ĐÃ MỞ
+     * SẴN (đã đăng nhập, đã được RoomManager ghép vào 1 GameRoom và server
+     * vừa gửi START) cho CaroClient, thay vì CaroClient tự mở kết nối mới
+     * qua connectToServer(...).
+     *
+     * Không mở Socket mới - dùng lại đúng out/in mà LobbyFrame đang có,
+     * vì phía server, GameRoom cũng đang trỏ tới đúng ClientHandler đó.
+     *
+     * assignedPlayerId lấy từ Message START mà LobbyFrame vừa nhận được
+     * (msg.playerId), rồi được "phát lại" qua handleMessage() ở đây để tái
+     * sử dụng NGUYÊN VẸN logic reset ván đấu của case START đã viết sẵn -
+     * không copy-paste lại logic.
+     */
+    public void attachExistingConnection(Socket socket, ObjectOutputStream out, ObjectInputStream in,
+                                          int assignedPlayerId, String opponentDisplayName,
+                                          Runnable returnToLobbyCallback) {
+        this.socket = socket;
+        this.out = out;
+        this.in = in;
+        this.returnToLobbyCallback = returnToLobbyCallback;
+
+        Message start = new Message(Message.Type.START);
+        start.playerId = assignedPlayerId;
+        handleMessage(start);
+
+        if (opponentDisplayName != null && !opponentDisplayName.trim().isEmpty()) {
+            Message nameMsg = new Message(Message.Type.NAME);
+            nameMsg.note = opponentDisplayName;
+            handleMessage(nameMsg); // tái sử dụng đúng logic case NAME đã có sẵn
+        }
+
+        Thread listenThread = new Thread(this::listenServer);
+        listenThread.setDaemon(true);
+        listenThread.start();
+    }
+
+    /**
+     * PHASE 11: người chơi bấm "Về sảnh chờ" - đóng kết nối ván đấu hiện
+     * tại (dứt khoát, không dùng lại được nữa) rồi quay lại LobbyFrame
+     * (LobbyFrame sẽ tự mở 1 kết nối MỚI khi hiện lại).
+     * Nếu CaroClient được chạy độc lập (không qua Lobby - callback null),
+     * chỉ đơn giản đóng cửa sổ.
+     */
+    private void onReturnToLobbyClick() {
+        if (gameStarted) {
+            int confirm = JOptionPane.showConfirmDialog(this,
+                    "Ván đấu đang diễn ra. Rời đi sẽ bị tính thua cuộc. Bạn có chắc chắn?",
+                    "Xác nhận rời ván đấu", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (confirm != JOptionPane.YES_OPTION) return;
+        }
+        stopTurnTimer();
+        try {
+            if (socket != null) socket.close();
+        } catch (IOException ignored) {
+        }
+        if (returnToLobbyCallback != null) {
+            returnToLobbyCallback.run();
+        }
+        dispose();
     }
 
     /**
@@ -505,6 +618,21 @@ public class CaroClient extends JFrame {
                 stopTurnTimer();
                 replayButton.setVisible(false);
                 setStatus("Đối thủ đã thoát khỏi ván chơi!", COLOR_PILL_LOSE);
+                break;
+
+            case OFFER_DRAW: {
+                int choice = JOptionPane.showConfirmDialog(this,
+                        (msg.note != null ? msg.note : "Đối thủ đề nghị hòa.") + "\nBạn có đồng ý không?",
+                        "Đề nghị hòa", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+                Message reply = new Message(choice == JOptionPane.YES_OPTION
+                        ? Message.Type.DRAW_ACCEPT : Message.Type.DRAW_REJECT);
+                reply.playerId = myId;
+                sendMessage(reply);
+                break;
+            }
+
+            case DRAW_REJECT:
+                setStatus(msg.note != null ? msg.note : "Đối thủ đã từ chối đề nghị hòa.", COLOR_PILL_WAIT);
                 break;
 
             default:

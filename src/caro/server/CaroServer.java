@@ -21,33 +21,21 @@ public class CaroServer {
     public static void main(String[] args) {
         System.out.println("=== CARO SERVER ===");
         printLocalIpAddresses();
+
+        // PHASE 2: khởi động AuthServer (cổng riêng 12346, xử lý đăng nhập/đăng ký)
+        // chạy nền song song - KHÔNG ảnh hưởng gì tới vòng lặp ghép game bên dưới.
+        AuthServer.startInBackground();
+
         try (ServerSocket serverSocket = new ServerSocket(PORT)) {
             System.out.println("Server đang lắng nghe tại port " + PORT + " ...");
+            System.out.println("(PHASE 5: mỗi kết nối được xử lý ngay bởi 1 thread riêng,");
+            System.out.println(" việc ghép cặp 2 người chơi do RoomManager quyết định qua Lobby)\n");
 
             while (true) {
-                // Mỗi vòng lặp: chờ đủ 2 client rồi ghép thành 1 phòng (GameRoom)
-                System.out.println("Đang chờ người chơi 1 ...");
-                Socket socket1 = serverSocket.accept();
-                ClientHandler player1 = new ClientHandler(socket1);
-                player1.setPlayerId(1);
-                new Thread(player1).start();
-                System.out.println("Người chơi 1 đã vào (" + socket1.getInetAddress() + ")");
-
-                System.out.println("Đang chờ người chơi 2 ...");
-                Socket socket2 = serverSocket.accept();
-                ClientHandler player2 = new ClientHandler(socket2);
-                player2.setPlayerId(2);
-                new Thread(player2).start();
-                System.out.println("Người chơi 2 đã vào (" + socket2.getInetAddress() + ")");
-
-                GameRoom room = new GameRoom();
-                room.setPlayer1(player1);
-                room.setPlayer2(player2);
-                player1.setRoom(room);
-                player2.setRoom(room);
-
-                System.out.println("Đủ 2 người chơi -> bắt đầu ván mới!\n");
-                room.startGame();
+                Socket socket = serverSocket.accept();
+                ClientHandler handler = new ClientHandler(socket);
+                new Thread(handler).start();
+                System.out.println("[Server] Kết nối mới từ " + socket.getInetAddress());
             }
         } catch (BindException e) {
             System.out.println();
