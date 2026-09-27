@@ -157,3 +157,5 @@ CaroOnline/
 - Chế độ AI không có timer/chat (không cần thiết cho chơi 1 mình).
 - Chưa có giao diện quản trị (admin panel) — không nằm trong phạm vi yêu
   cầu ban đầu.
+
+Built with by Nguyễn Trần Như Ngọc 🐨 – 2026
