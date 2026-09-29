@@ -152,7 +152,7 @@ public class AIGameFrame extends JFrame {
         if (currentUser != null) {
             new Thread(() -> {
                 try {
-                    int id = new MatchDAO().createMatch(currentUser.getId(), null, "AI", null);
+                    int id = new MatchDAO().createMatch(currentUser.getId(), null, "AI", null, difficulty);
                     matchId = id;
                 } catch (DatabaseConnection.DatabaseException e) {
                     System.out.println("[AIGameFrame] Không thể tạo match trong DB: " + e.getMessage());

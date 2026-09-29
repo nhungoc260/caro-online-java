@@ -38,8 +38,15 @@ public class MatchDAO {
      */
     public int createMatch(int player1Id, Integer player2Id, String mode, String roomCode)
             throws DatabaseConnection.DatabaseException {
-        String sql = "INSERT INTO matches (player1_id, player2_id, result, mode, room_code, started_at) "
-                + "VALUES (?, ?, 'ABANDONED', ?, ?, ?)";
+        return createMatch(player1Id, player2Id, mode, roomCode, null);
+    }
+
+    /** aiDifficulty: EASY / MEDIUM / HARD khi mode = AI, null khi đấu online. */
+    public int createMatch(int player1Id, Integer player2Id, String mode, String roomCode,
+                           String aiDifficulty)
+            throws DatabaseConnection.DatabaseException {
+        String sql = "INSERT INTO matches (player1_id, player2_id, result, mode, room_code, started_at, ai_difficulty) "
+                + "VALUES (?, ?, 'ABANDONED', ?, ?, ?, ?)";
         // result tạm để 'ABANDONED' cho tới khi finishMatch cập nhật giá trị thật;
         // nếu server bị tắt đột ngột giữa chừng, bản ghi vẫn phản ánh đúng "trận bỏ dở".
         try (Connection conn = DatabaseConnection.getConnection();
@@ -53,6 +60,11 @@ public class MatchDAO {
             ps.setString(3, mode);
             ps.setString(4, roomCode);
             ps.setTimestamp(5, new Timestamp(System.currentTimeMillis()));
+            if (aiDifficulty != null) {
+                ps.setString(6, aiDifficulty);
+            } else {
+                ps.setNull(6, java.sql.Types.VARCHAR);
+            }
             ps.executeUpdate();
             try (ResultSet keys = ps.getGeneratedKeys()) {
                 return keys.next() ? keys.getInt(1) : -1;
@@ -98,7 +110,7 @@ public class MatchDAO {
     public List<MatchHistoryItem> getHistoryForUser(int userId, int limit)
             throws DatabaseConnection.DatabaseException {
         String sql = "SELECT m.id, m.mode, m.result, m.winner_id, m.started_at, "
-                + "m.duration_seconds, m.player1_id, m.player2_id, "
+                + "m.duration_seconds, m.player1_id, m.player2_id, m.ai_difficulty, "
                 + "u.display_name AS opponent_name "
                 + "FROM matches m "
                 + "LEFT JOIN users u ON u.id = (CASE WHEN m.player1_id = ? THEN m.player2_id ELSE m.player1_id END) "
@@ -120,8 +132,16 @@ public class MatchDAO {
                     int durationSec = rs.getInt("duration_seconds");
                     item.durationSeconds = rs.wasNull() ? null : durationSec;
 
-                    item.opponentName = "AI".equals(item.mode)
-                            ? "AI" : rs.getString("opponent_name");
+                    if ("AI".equals(item.mode)) {
+                        String diff = rs.getString("ai_difficulty");
+                        String label = "EASY".equals(diff) ? " (Dễ)"
+                                : "MEDIUM".equals(diff) ? " (Trung bình)"
+                                : "HARD".equals(diff) ? " (Khó)" : "";
+                        item.opponentName = "Máy AI" + label;
+                    } else {
+                        String name = rs.getString("opponent_name");
+                        item.opponentName = (name != null) ? name : "(tài khoản đã xóa)";
+                    }
 
                     String rawResult = rs.getString("result");
                     int winnerIdValue = rs.getInt("winner_id");

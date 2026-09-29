@@ -63,7 +63,7 @@ public class HistoryFrame extends JFrame {
             String mode = "AI".equals(m.mode) ? "AI" : "ONLINE";
             model.addRow(new Object[]{
                     m.startedAt != null ? DATE_FMT.format(m.startedAt) : "-",
-                    m.opponentName != null ? m.opponentName : "?",
+                    m.opponentName != null ? m.opponentName : "(không rõ)",
                     mode, result, duration
             });
         }

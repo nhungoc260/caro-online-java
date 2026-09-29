@@ -65,6 +65,7 @@ CREATE TABLE matches (
     result           ENUM('WIN','LOSS','DRAW','ABANDONED') NOT NULL,
     mode             ENUM('ONLINE','AI') NOT NULL DEFAULT 'ONLINE',
     room_code        VARCHAR(10)  NULL,
+    ai_difficulty    ENUM('EASY','MEDIUM','HARD') NULL COMMENT 'Do kho AI, NULL khi mode = ONLINE',
     started_at       DATETIME     NOT NULL,
     ended_at         DATETIME     NULL,
     duration_seconds INT UNSIGNED NULL,
