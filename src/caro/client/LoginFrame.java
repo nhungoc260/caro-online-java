@@ -40,7 +40,10 @@ public class LoginFrame extends JFrame {
     private RoundedButton loginButton;
     private RoundedButton registerButton;
 
-    public LoginFrame() {
+    private final String serverIp;
+
+    public LoginFrame(String serverIp) {
+        this.serverIp = (serverIp == null || serverIp.trim().isEmpty()) ? "localhost" : serverIp.trim();
         setTitle("Cờ Caro Online - Đăng nhập");
         setDefaultCloseOperation(EXIT_ON_CLOSE);
         setLayout(new BorderLayout());
@@ -49,8 +52,8 @@ public class LoginFrame extends JFrame {
         add(buildHeader(), BorderLayout.NORTH);
         add(buildFormPanel(), BorderLayout.CENTER);
 
-        setSize(460, 560);
-        setMinimumSize(new Dimension(400, 520));
+        setSize(460, 620);
+        setMinimumSize(new Dimension(400, 580));
         setLocationRelativeTo(null);
 
         getRootPane().setDefaultButton(loginButton);
@@ -124,10 +127,11 @@ public class LoginFrame extends JFrame {
 
         c.gridy = row++;
         c.insets = new Insets(14, 0, 6, 0);
-        card.add(fieldLabel("IP Server (để trống = localhost)"), c);
+        card.add(fieldLabel("Server đang kết nối"), c);
 
         serverIpField = styledTextField();
-        serverIpField.setText("localhost");
+        serverIpField.setText(serverIp);
+        serverIpField.setEditable(false);
         c.gridy = row++;
         c.insets = new Insets(6, 0, 6, 0);
         card.add(serverIpField, c);
@@ -162,6 +166,15 @@ public class LoginFrame extends JFrame {
         c.gridy = row++;
         c.insets = new Insets(4, 0, 0, 0);
         card.add(registerRow, c);
+
+        RoundedButton changeServerButton = new RoundedButton("Đổi server");
+        changeServerButton.setBackground(Theme.TAUPE_WAIT);
+        changeServerButton.setBorder(new EmptyBorder(6, 14, 6, 14));
+        changeServerButton.setFont(Theme.boldFont(12));
+        changeServerButton.addActionListener(e -> onChangeServerClick());
+        c.gridy = row++;
+        c.insets = new Insets(10, 60, 0, 60);
+        card.add(changeServerButton, c);
 
         GridBagConstraints wc = new GridBagConstraints();
         wc.gridx = 0;
@@ -207,9 +220,7 @@ public class LoginFrame extends JFrame {
     private void onLoginClick() {
         String username = usernameField.getText().trim();
         String password = new String(passwordField.getPassword());
-        String ip = serverIpField.getText().trim();
-        if (ip.isEmpty()) ip = "localhost";
-        final String finalIp = ip;
+        final String finalIp = serverIp;
 
         if (username.isEmpty() || password.isEmpty()) {
             showMessage("Vui lòng nhập đầy đủ tên đăng nhập và mật khẩu.", true);
@@ -251,18 +262,25 @@ public class LoginFrame extends JFrame {
      * Sau khi đăng nhập thành công: mở LobbyFrame (sảnh chờ chính).
      */
     private void openLobbyAfterLogin(User user) {
-        String ip = serverIpField.getText().trim();
-        if (ip.isEmpty()) ip = "localhost";
-        final String finalIp = ip;
+        final String finalIp = serverIp;
 
         dispose(); // đóng LoginFrame
         SwingUtilities.invokeLater(() -> new LobbyFrame(user, finalIp).setVisible(true));
     }
 
+    /** IP server đã nhập ở màn hình Kết nối. RegisterFrame dùng lại giá trị này. */
+    String getServerIp() {
+        return serverIp;
+    }
+
+    private void onChangeServerClick() {
+        dispose();
+        new ConnectFrame(serverIp).setVisible(true);
+    }
+
     private void setFormEnabled(boolean enabled) {
         usernameField.setEnabled(enabled);
         passwordField.setEnabled(enabled);
-        serverIpField.setEnabled(enabled);
         loginButton.setEnabled(enabled);
         registerButton.setEnabled(enabled);
     }
@@ -298,6 +316,6 @@ public class LoginFrame extends JFrame {
     }
 
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> new LoginFrame().setVisible(true));
+        SwingUtilities.invokeLater(() -> new ConnectFrame().setVisible(true));
     }
 }

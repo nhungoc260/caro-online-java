@@ -406,7 +406,7 @@ public class LobbyFrame extends JFrame {
         } catch (IOException ignored) {
         }
         dispose();
-        SwingUtilities.invokeLater(() -> new LoginFrame().setVisible(true));
+        SwingUtilities.invokeLater(() -> new LoginFrame(serverIp).setVisible(true));
     }
 
     // ---------- Gửi message ----------

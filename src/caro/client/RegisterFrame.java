@@ -213,11 +213,8 @@ public class RegisterFrame extends JFrame {
     }
 
     private String resolveServerIp() {
-        // RegisterFrame không có ô nhập IP riêng (theo đúng thiết kế màn hình
-        // đăng ký ở mục V - chỉ có Username/Password/Confirm/DisplayName).
-        // Dùng chung server localhost mặc định; nếu cần đăng ký từ máy khác
-        // trong LAN, người dùng nên đăng ký trực tiếp trên máy chạy server.
-        return "localhost";
+        // Dùng đúng IP server đã nhập ở màn hình Kết nối (qua LoginFrame).
+        return parentLogin != null ? parentLogin.getServerIp() : "localhost";
     }
 
     /**
